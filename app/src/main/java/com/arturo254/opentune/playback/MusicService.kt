@@ -817,12 +817,14 @@ class MusicService :
                             )
                         }
 
-                        else -> throw PlaybackException(
-                            getString(R.string.error_unknown),
-                            throwable,
-                            PlaybackException.ERROR_CODE_REMOTE_ERROR
-                        )
-                    }
+                        else -> {
+                            Timber.e(throwable, "Playback error for mediaId: $mediaId")
+                            throw PlaybackException(
+                                getString(R.string.error_unknown),
+                                throwable,
+                                PlaybackException.ERROR_CODE_REMOTE_ERROR
+                            )
+                        }
                 }
 
                 val format = playbackData.format
