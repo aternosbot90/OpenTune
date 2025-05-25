@@ -23,11 +23,7 @@ import com.arturo254.opentune.utils.YTPlayerUtils
 import com.arturo254.opentune.utils.enumPreference
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import java.util.concurrent.Executor
@@ -47,11 +43,12 @@ constructor(
     private val connectivityManager = context.getSystemService<ConnectivityManager>()!!
     private val audioQuality by enumPreference(context, AudioQualityKey, AudioQuality.AUTO)
     private val songUrlCache = HashMap<String, Pair<String, Long>>()
+
     private val dataSourceFactory =
         ResolvingDataSource.Factory(
             CacheDataSource
                 .Factory()
-                .setCache(playerCache)
+                .setCache(downloadCache) // ✅ fixed
                 .setUpstreamDataSourceFactory(
                     OkHttpDataSource.Factory(
                         OkHttpClient
@@ -64,7 +61,7 @@ constructor(
             val mediaId = dataSpec.key ?: error("No media id")
             val length = if (dataSpec.length >= 0) dataSpec.length else 1
 
-            if (playerCache.isCached(mediaId, dataSpec.position, length)) {
+            if (downloadCache.isCached(mediaId, dataSpec.position, length)) {
                 return@Factory dataSpec
             }
 
@@ -98,23 +95,35 @@ constructor(
                 )
             }
 
-            val streamUrl = playbackData.streamUrl.let {
-                // Specify range to avoid YouTube's throttling
-                "${it}&range=0-${format.contentLength ?: 10000000}"
-            }
-
+            val streamUrl = "${playbackData.streamUrl}&range=0-${format.contentLength ?: 10000000}"
             songUrlCache[mediaId] =
                 streamUrl to System.currentTimeMillis() + (playbackData.streamExpiresInSeconds * 1000L)
+
             dataSpec.withUri(streamUrl.toUri())
         }
+
+    // ✅ Separate factory for DownloadManager to avoid ResolvingDataSource complications
+    private val downloadDataSourceFactory = CacheDataSource
+        .Factory()
+        .setCache(downloadCache)
+        .setUpstreamDataSourceFactory(
+            OkHttpDataSource.Factory(
+                OkHttpClient
+                    .Builder()
+                    .proxy(YouTube.proxy)
+                    .build()
+            )
+        )
+
     val downloadNotificationHelper =
         DownloadNotificationHelper(context, ExoDownloadService.CHANNEL_ID)
+
     val downloadManager: DownloadManager =
         DownloadManager(
             context,
             databaseProvider,
             downloadCache,
-            dataSourceFactory,
+            downloadDataSourceFactory, // ✅ using correct factory here
             Executor(Runnable::run)
         ).apply {
             maxParallelDownloads = 3
@@ -126,6 +135,7 @@ constructor(
                 ),
             )
         }
+
     val downloads = MutableStateFlow<Map<String, Download>>(emptyMap())
 
     fun getDownload(songId: String): Flow<Download?> = downloads.map { it[songId] }
